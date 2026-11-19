@@ -3,9 +3,18 @@ window.__ModuleLoader__.load({
   factory(require) {
     const { createElement: h, useEffect, useRef, useState } = require('react')
     /* protocol factory */
-    const { name, defaults, descriptors, promptLimit } = protocol()
-    const tabs = [['tools', '工具'], ['skills', '技能'], ['prompt', '系统提示词']]
-    const toolGroups = ['项目与文件', '网络与搜索', '命令与终端', '其他工具']
+    const { name, defaults, descriptors, promptLimit, taskLimit } = protocol()
+    const tabs = [['tools', '工具'], ['skills', '技能'], ['prompt', '系统提示词'], ['contexts', '上下文层次'], ['recommend', 'AI 推荐']]
+    const groupModes = [['source', '来源'], ['category', '功能'], ['tags', '标签']]
+    const skillSources = {
+      'project-dsh': '项目 · DSH', 'project-agents': '项目 · Agent Skills',
+      'user-dsh': '用户 · DSH', 'user-agents': '用户 · Agent Skills',
+      runtime: '运行时', bundled: '随预设提供',
+    }
+    const contextLabels = {
+      'conversation-context:notes': '会话补充',
+      'working-directory:current': '工作目录',
+    }
     const slot = 'conversation.input.left'
     const style = `
       .dcc-trigger,.dcc-panel button,.dcc-panel input,.dcc-panel textarea {font:inherit}
@@ -21,16 +30,18 @@ window.__ModuleLoader__.load({
         outline:2px solid var(--dsw-alias-state-business-primary,Highlight);outline-offset:2px
       }
       .dcc-panel {
-        width:min(440px,calc(100vw - 32px));max-height:min(600px,calc(100dvh - 32px));box-sizing:border-box;
+        width:min(510px,calc(100vw - 24px));max-height:min(690px,calc(100dvh - 24px));box-sizing:border-box;
         background:var(--dsw-alias-bg-module-platform,Canvas);color:var(--dsw-alias-label-primary,CanvasText);
         border:1px solid var(--dsw-alias-border-l2,GrayText);border-radius:14px;padding:0;
         box-shadow:0 16px 52px #0004;font-size:14px;line-height:1.45
       }
       .dcc-panel::backdrop {background:#11182724}
+      .dcc-panel.dcc-wide {width:min(820px,calc(100vw - 24px));max-height:calc(100dvh - 24px)}
       .dcc-layout {display:grid;grid-template-rows:auto auto minmax(0,1fr) auto;max-height:inherit}
       .dcc-head,.dcc-actions,.dcc-tabs,.dcc-modes {display:flex;align-items:center;gap:6px}
       .dcc-head,.dcc-actions {justify-content:space-between;padding:12px 16px}
       .dcc-head h2 {font-size:16px;margin:0}
+      .dcc-tabs,.dcc-modes {flex-wrap:wrap}
       .dcc-tabs {padding:0 16px 8px;border-bottom:1px solid var(--dsw-alias-border-l2,GrayText)}
       .dcc-panel [aria-pressed=true] {background:var(--dsw-alias-interactive-bg-hover,ButtonFace);border-color:var(--dsw-alias-border-l2,GrayText);font-weight:600}
       .dcc-body {min-height:0;overflow:auto;padding:12px 16px;overscroll-behavior:contain}
@@ -43,6 +54,13 @@ window.__ModuleLoader__.load({
       }
       .dcc-panel textarea {min-height:175px;resize:vertical;margin-top:6px}
       .dcc-list {max-height:245px;overflow:auto;scroll-padding:6px;padding:4px}
+      .dcc-wide .dcc-list {max-height:min(460px,42dvh)}
+      .dcc-tags {display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}
+      .dcc-tags em {font-size:11px;font-style:normal;padding:1px 5px;border:1px solid var(--dsw-alias-border-l2,GrayText);border-radius:5px}
+      .dcc-layer {padding:8px 0;border-bottom:1px solid var(--dsw-alias-border-l2,GrayText)}
+      .dcc-layer summary {cursor:pointer;overflow-wrap:anywhere}
+      .dcc-layer pre {white-space:pre-wrap;overflow-wrap:anywhere;max-height:300px;overflow:auto}
+      .dcc-layer textarea {min-height:110px}
       .dcc-list h3 {font-size:12px;margin:12px 4px 4px;color:var(--dsw-alias-label-secondary,CanvasText)}
       .dcc-group {display:flex;align-items:center;gap:7px;cursor:pointer}
       .dcc-group input {margin:0;accent-color:var(--dsw-alias-state-business-primary,Highlight)}
@@ -59,18 +77,15 @@ window.__ModuleLoader__.load({
       .dcc-error {margin:0;padding:8px 16px;color:var(--dsw-alias-state-danger-label,#b12222);font-size:13px}
     `
 
-    function group(key, name) {
-      if (key === 'skills') return '可用技能'
-      if (/^mcp__/i.test(name)) return 'MCP · ' + (name.split('__')[1] || '工具')
-      if (/^(web_|search_web|fetch_url)/.test(name)) return '网络与搜索'
-      if (/^(read|write|edit|grep|glob|apply_patch|read_image|list_dir)$/.test(name)) return '项目与文件'
-      if (/^(bash|pwsh|terminal|jobs)/.test(name)) return '命令与终端'
-      return '其他工具'
+    function sourceLabel(key, row) {
+      return key === 'skills'
+        ? [skillSources[row.source] ?? row.source ?? '其他来源', row.provider].filter(Boolean).join(' · ')
+        : row.source
     }
 
-    function groupOrder(name) {
-      const index = toolGroups.indexOf(name)
-      return index === -1 ? toolGroups.length : index
+    function groupsFor(key, mode, row) {
+      if (mode === 'tags') return row.tags.length > 0 ? row.tags : ['无标签']
+      return [mode === 'source' ? sourceLabel(key, row) : row.category]
     }
 
     async function request(rpc, method, input, signal) {
@@ -83,6 +98,7 @@ window.__ModuleLoader__.load({
       const dialog = useRef(null)
       const trigger = useRef(null)
       const pending = useRef(null)
+      const recommending = useRef(null)
       const [snapshot, setSnapshot] = useState(null)
       const [draft, setDraft] = useState(defaults)
       const [tab, setTab] = useState('tools')
@@ -93,8 +109,34 @@ window.__ModuleLoader__.load({
       const [showPreview, setShowPreview] = useState(false)
       const [preview, setPreview] = useState(null)
       const [previewError, setPreviewError] = useState('')
+      const [groupMode, setGroupMode] = useState('category')
+      const [wide, setWide] = useState(false)
+      const [layers, setLayers] = useState(null)
+      const [layerError, setLayerError] = useState('')
+      const [layerRetry, setLayerRetry] = useState(0)
+      const [task, setTask] = useState('')
+      const [recommendBusy, setRecommendBusy] = useState(false)
+      const [recommendation, setRecommendation] = useState(null)
+      const [recommendError, setRecommendError] = useState('')
       const titleId = `dcc-${sessionId}`
-      useEffect(() => () => pending.current?.abort(), [])
+      useEffect(() => () => { pending.current?.abort(); recommending.current?.abort() }, [])
+      useEffect(() => {
+        if (tab !== 'contexts' || !snapshot || showPreview) return
+        const controller = new AbortController()
+        setLayers(null)
+        setLayerError('')
+        request(rpc, 'contextLayers', { sessionId }, controller.signal).then(value => {
+          if (controller.signal.aborted) return
+          if (value.revision !== snapshot.revision) {
+            setLayerError('会话配置已更新，请重新打开面板。')
+            return
+          }
+          setLayers(value.layers)
+        }, error => {
+          if (!controller.signal.aborted) setLayerError(error.message)
+        })
+        return () => controller.abort()
+      }, [tab, snapshot, showPreview, rpc, sessionId, layerRetry])
       useEffect(() => {
         if (!showPreview) return
         const controller = new AbortController()
@@ -115,6 +157,9 @@ window.__ModuleLoader__.load({
         setShowPreview(false)
         setTab('tools')
         setSearch('')
+        setTask('')
+        setRecommendation(null)
+        setRecommendError('')
         const controller = new AbortController()
         pending.current = controller
         dialog.current.showModal()
@@ -133,6 +178,9 @@ window.__ModuleLoader__.load({
 
       function close() {
         pending.current?.abort()
+        recommending.current?.abort()
+        recommending.current = null
+        setRecommendBusy(false)
         setShowPreview(false)
         trigger.current?.focus()
       }
@@ -161,28 +209,63 @@ window.__ModuleLoader__.load({
         setDraft(previous => ({ ...previous, [tab]: value }))
       }
 
+      function editLayer(name, text) {
+        setDraft(previous => {
+          const contexts = previous.contexts.filter(row => row.name !== name)
+          if (text !== undefined) contexts.push({ name, text })
+          return { ...previous, contexts }
+        })
+      }
+
+      async function recommend() {
+        if (!task.trim() || recommending.current) return
+        const controller = new AbortController()
+        recommending.current = controller
+        setRecommendBusy(true)
+        setRecommendation(null)
+        setRecommendError('')
+        try {
+          const result = await request(rpc, 'recommend', { sessionId, task }, controller.signal)
+          if (controller.signal.aborted) return
+          const tools = result.tools.filter(name => snapshot.tools.some(row => row.name === name && !row.disconnected))
+          const skills = result.skills.filter(name => snapshot.skills.some(row => row.name === name))
+          setRecommendation({ tools, skills })
+          if (tools.length || skills.length) setDraft(previous => ({ ...previous, tools, skills }))
+        } catch (error) {
+          if (!controller.signal.aborted) setRecommendError(error.message)
+        } finally {
+          if (recommending.current === controller) {
+            recommending.current = null
+            setRecommendBusy(false)
+          }
+        }
+      }
+
+      const catalogTab = tab === 'tools' || tab === 'skills'
       const selected = draft[tab]
       const rows = snapshot?.[tab] ?? []
       const manualSkills = draft.skills !== null
       const groups = new Map()
-      if (tab !== 'prompt') {
+      if (catalogTab) {
         const filter = search.trim().toLowerCase()
         for (const row of rows) {
-          if (!`${row.name} ${row.description}`.toLowerCase().includes(filter)) continue
-          const heading = group(tab, row.name)
-          if (!groups.has(heading)) groups.set(heading, [])
-          groups.get(heading).push(row)
+          if (!`${row.name} ${row.description} ${sourceLabel(tab, row)} ${row.category} ${row.tags.join(' ')}`.toLowerCase().includes(filter)) continue
+          for (const heading of groupsFor(tab, groupMode, row)) {
+            if (!groups.has(heading)) groups.set(heading, [])
+            groups.get(heading).push(row)
+          }
         }
       }
-      const active = snapshot && ['tools', 'skills', 'prompt'].some(key => snapshot.config[key] !== null)
-      const ready = snapshot && !busy
-      const canSave = ready && (!editingPrompt || draft.prompt?.trim())
-      const selectable = tab !== 'prompt'
+      const active = snapshot && (snapshot.config.contexts.length > 0 || ['tools', 'skills', 'prompt'].some(key => snapshot.config[key] !== null))
+      const ready = snapshot && !busy && !recommendBusy
+      const canSave = ready && (!editingPrompt || draft.prompt?.trim()) &&
+        draft.contexts.every(row => row.text === null || row.text.trim())
+      const selectable = catalogTab
         ? rows.filter(row => !row.disconnected && (tab !== 'tools' || !manualSkills || row.name !== 'skill'))
         : []
 
       function groupCheckbox(heading) {
-        const names = selectable.filter(row => group(tab, row.name) === heading).map(row => row.name)
+        const names = selectable.filter(row => groupsFor(tab, groupMode, row).includes(heading)).map(row => row.name)
         const current = new Set(selected ?? selectable.map(row => row.name))
         const count = names.filter(name => current.has(name)).length
         return h('label', { className: 'dcc-group' },
@@ -200,17 +283,34 @@ window.__ModuleLoader__.load({
           }), heading)
       }
 
+      function layerRow(row) {
+        const override = draft.contexts.find(entry => entry.name === row.name)
+        const text = override ? override.text : row.text
+        const enabled = text !== null && (!!override || text.length > 0)
+        const label = contextLabels[row.name] ?? row.name
+        return h('div', { key: row.name, className: 'dcc-layer' },
+          h('label', { className: 'dcc-item' },
+            h('input', { type: 'checkbox', checked: enabled, disabled: !ready || row.required,
+              onChange: event => editLayer(row.name, event.target.checked ? row.text : null) }),
+            h('span', null, label, h('small', { className: 'dcc-subtle' }, row.required ? 'DSH 管理 · 只读' : enabled ? '开启' : '关闭'))),
+          h('details', null, h('summary', null, `查看${row.required ? '' : '与编辑'}内容 · ${label}`),
+            row.required ? h('pre', null, text || '暂无内容') :
+              h('textarea', { value: text ?? '', maxLength: promptLimit, disabled: !ready || !enabled,
+                'aria-label': `编辑 ${label}`, onChange: event => editLayer(row.name, event.target.value) }),
+            override && h('button', { type: 'button', disabled: !ready, onClick: () => editLayer(row.name, undefined) }, '恢复该层默认')))
+      }
+
       return h('div', null,
         h('style', null, style),
         h('button', {
           className: 'dcc-trigger', type: 'button', ref: trigger, onClick: open,
-          'aria-haspopup': 'dialog', title: active ? '当前会话有临时配置' : '设置当前会话的工具、技能和系统提示词',
+          'aria-haspopup': 'dialog', title: active ? '当前会话有临时配置' : '设置当前会话的工具、技能和上下文',
         },
         h('svg', { viewBox: '0 0 16 16', width: 14, height: 14, fill: 'none', stroke: 'currentColor', 'aria-hidden': true },
           h('path', { d: 'M2 4h12M2 8h12M2 12h12M6 2v4M10 6v4M5 10v4', strokeWidth: 1.4, strokeLinecap: 'round' })),
         active ? '上下文 · 已自定义' : '上下文'),
         h('dialog', {
-          className: 'dcc-panel', ref: dialog, 'aria-labelledby': titleId, onClose: close,
+          className: wide ? 'dcc-panel dcc-wide' : 'dcc-panel', ref: dialog, 'aria-labelledby': titleId, onClose: close,
           onCancel: event => { if (busy && snapshot) event.preventDefault() },
           onKeyDown: event => {
             if (event.key !== 'Escape' || event.nativeEvent.isComposing) return
@@ -220,9 +320,12 @@ window.__ModuleLoader__.load({
           },
         }, h('div', { className: 'dcc-layout' },
           h('header', { className: 'dcc-head' }, h('h2', { id: titleId }, '会话上下文'),
-            h('button', { type: 'button', onClick: () => dialog.current.close(), disabled: busy && !!snapshot, 'aria-label': '关闭' }, '×')),
+            h('div', null,
+              h('button', { type: 'button', 'aria-pressed': wide, onClick: () => setWide(value => !value) }, wide ? '缩小' : '放大'),
+              h('button', { type: 'button', onClick: () => dialog.current.close(), disabled: busy && !!snapshot, 'aria-label': '关闭' }, '×'))),
           h('nav', { className: 'dcc-tabs', 'aria-label': '上下文配置类别' }, tabs.map(([key, label]) =>
             h('button', { key, type: 'button', 'aria-pressed': !showPreview && tab === key,
+              disabled: recommendBusy && key !== 'recommend',
               onClick: () => { setShowPreview(false); setTab(key); setSearch('') } }, label))),
           h('section', { className: 'dcc-body', 'aria-busy': busy },
             !snapshot ? h('p', { role: 'status' }, busy ? '正在读取会话配置…' : '关闭面板后可重新加载。') :
@@ -240,7 +343,38 @@ window.__ModuleLoader__.load({
                     preview.guardedTools.length > 0 && h('p', null,
                       `已在执行时限制 · ${preview.guardedTools.join('、')}`),
                     h('h3', null, '后续轮次的技能'),
-                    h('p', null, preview.skills === null ? '沿用 DSH 的自动发现' : preview.skills.join('、') || '无手动注入'))) :
+                    h('p', null, preview.skills === null ? '沿用 DSH 的自动发现' : preview.skills.join('、') || '无手动注入'),
+                    h('h3', null, '运行上下文'),
+                    h('p', null, preview.contexts.map(name => contextLabels[name] ?? name).join('、') || '无'))) :
+              tab === 'contexts' ? h('div', null,
+                h('p', null, '查看当前会话的运行上下文。可选层可以临时启停或编辑，改动会应用到后续请求。'),
+                layerError ? h('div', null, h('p', { role: 'alert' }, layerError),
+                  h('button', { type: 'button', onClick: () => setLayerRetry(count => count + 1) }, '重新读取')) :
+                  !layers ? h('p', { role: 'status' }, '正在读取上下文层次…') :
+                    h('div', null,
+                      layers.length === 0 && h('p', null, '当前没有可显示的运行上下文。'),
+                      !layers.some(row => !row.required) && h('p', null, '当前预设关闭了可选运行上下文。'),
+                      layers.map(layerRow),
+                      draft.contexts.filter(entry => !layers.some(row => row.name === entry.name && !row.required))
+                        .map(entry => h('div', { key: entry.name, className: 'dcc-layer' }, entry.name,
+                          h('button', { type: 'button', onClick: () => editLayer(entry.name, undefined) }, '移除失效配置'))))) :
+              tab === 'recommend' ? h('div', null,
+                h('label', null, '你想做什么？', h('textarea', {
+                  value: task, maxLength: taskLimit, disabled: !ready,
+                  placeholder: '例如：我需要制作一份项目汇报 PPT',
+                  onChange: event => setTask(event.target.value),
+                })),
+                h('p', null, '使用当前会话的模型。请求包含任务描述和候选工具、技能的名称与摘要。'),
+                h('button', { type: 'button', className: 'dcc-primary', disabled: !ready || !task.trim(), onClick: recommend },
+                  recommendBusy ? '正在推荐…' : '推荐并勾选'),
+                recommendError && h('p', { role: 'alert' }, recommendError),
+                recommendation && h('div', { role: 'status' },
+                  recommendation.tools.length || recommendation.skills.length
+                    ? h('div', null,
+                      h('p', null, '已填入勾选草稿。检查后点击「应用」。'),
+                      h('p', null, `工具 · ${recommendation.tools.join('、') || '无'}`),
+                      h('p', null, `技能 · ${recommendation.skills.join('、') || '无'}`))
+                    : h('p', null, '没有找到匹配的工具或技能。'))) :
               tab === 'prompt' ? h('div', null,
                 h('label', { className: 'dcc-item' },
                   h('input', { type: 'checkbox', checked: editingPrompt, disabled: !ready,
@@ -274,10 +408,14 @@ window.__ModuleLoader__.load({
                 h('input', { type: 'search', value: search, onChange: event => setSearch(event.target.value),
                   'aria-label': tab === 'tools' ? '搜索工具' : '搜索技能',
                   placeholder: tab === 'tools' ? '搜索工具…' : '搜索技能…' }),
+                h('div', { className: 'dcc-modes', 'aria-label': '分组方式' },
+                  groupModes.map(([mode, label]) => h('button', {
+                    key: mode, type: 'button', 'aria-pressed': groupMode === mode, onClick: () => setGroupMode(mode),
+                  }, label))),
                 h('div', { className: 'dcc-list' }, groups.size === 0 ? h('p', null, '没有匹配项。') :
-                  [...groups].sort(([left], [right]) => groupOrder(left) - groupOrder(right) || left.localeCompare(right))
+                  [...groups].sort(([left], [right]) => left.localeCompare(right, 'zh-CN'))
                     .map(([heading, items]) => h('section', { key: heading },
-                    h('h3', null, tab === 'tools' ? groupCheckbox(heading) : heading), items.map(row => {
+                    h('h3', null, groupCheckbox(heading)), items.map(row => {
                       const unavailable = tab === 'tools' && manualSkills && row.name === 'skill'
                       return h('label', { className: 'dcc-item', key: row.name },
                         h('input', {
@@ -289,7 +427,9 @@ window.__ModuleLoader__.load({
                           },
                         }), h('span', null, row.name, row.executionOnly && !unavailable &&
                           h('span', { className: 'dcc-subtle' }, '会话注册 · 仅限制执行'), h('small', { className: 'dcc-subtle' },
-                          unavailable ? '由当前技能清单控制' : row.description)))
+                          unavailable ? '由当前技能清单控制' : row.description),
+                          h('small', { className: 'dcc-subtle' }, sourceLabel(tab, row)),
+                          row.tags.length > 0 && h('span', { className: 'dcc-tags' }, row.tags.map(tag => h('em', { key: tag }, tag)))))
                     })))))),
           h('div', null,
             failure && h('p', { className: 'dcc-error', role: 'alert' }, failure),

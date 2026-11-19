@@ -1,6 +1,6 @@
 {
   "name": "@local/dsh-conversation-context",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "private": true,
   "type": "module",
   "description": "Session-local tools, skills, and system prompt controls for DeepSeek Harness.",
@@ -15,7 +15,7 @@
     "./client": "./dist/client.js",
     "./package.json": "./package.json"
   },
-  "files": ["index.js", "protocol.js", "dist/client.js", "cordis.patch.yml", "README.md"],
+  "files": ["index.js", "catalog.js", "protocol.js", "dist/client.js", "cordis.patch.yml", "README.md", "assets"],
   "dsh": {
     "manifestVersion": 1,
     "bundle": { "patch": "./cordis.patch.yml" },
